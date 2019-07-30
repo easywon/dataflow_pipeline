@@ -42,6 +42,7 @@ namespace DataflowPipeline
                 Console.WriteLine("Filtering word list...");
 
                 return words
+                   .Where(word => word.Length > 8)
                    .Distinct()
                    .ToArray();
             });
@@ -60,6 +61,42 @@ namespace DataflowPipeline
                        select word;
             });
 
+            // New Custom Flow
+            var SplitOddEven = new CustomDataflow.SeparateByLength<string[], string[], string>(
+                (a, even) =>
+                {
+                    string temp = "";
+
+                    foreach(string s in a)
+                    {
+                        if(s.Length % 2 == 0)
+                        {
+                            even(s);
+                        }
+                        else
+                        {
+                            temp += s + " ";
+                        }
+                    }
+
+                    return temp.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                });
+
+            // Print Odd Words
+            var printOddWords = new ActionBlock<string[]>(oddWord =>
+            {
+                foreach(string s in oddWord)
+                {
+                    Console.WriteLine("Odd word - " + s);
+                }
+            });
+
+            var printEvenWords = new ActionBlock<string>(evenWord =>
+            {
+                Console.WriteLine("Even word - " + evenWord);
+            });
+
+
             // Prints the provided reversed words to the console.    
             var printReversedWords = new ActionBlock<string>(reversedWord =>
             {
@@ -75,8 +112,12 @@ namespace DataflowPipeline
 
             downloadString.LinkTo(createWordList, linkOptions);
             createWordList.LinkTo(filterWordList, linkOptions);
-            filterWordList.LinkTo(findReversedWords, linkOptions);
-            findReversedWords.LinkTo(printReversedWords, linkOptions);
+            //filterWordList.LinkTo(findReversedWords, linkOptions);
+            //findReversedWords.LinkTo(printReversedWords, linkOptions);
+
+            filterWordList.LinkTo(SplitOddEven, linkOptions);
+            SplitOddEven.EvenSource.LinkTo(printEvenWords, linkOptions);
+            SplitOddEven.OddSource.LinkTo(printOddWords, linkOptions);
 
             // Process "The Iliad of Homer" by Homer.
             downloadString.Post("http://www.gutenberg.org/files/6130/6130-0.txt");
@@ -84,8 +125,10 @@ namespace DataflowPipeline
             // Mark the head of the pipeline as complete.
             downloadString.Complete();
 
+            printOddWords.Completion.Wait();
+
             // Wait for the last block in the pipeline to process all messages.
-            printReversedWords.Completion.Wait();
+            //printReversedWords.Completion.Wait();
         }
     }
 }
