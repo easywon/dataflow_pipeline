@@ -16,16 +16,17 @@ namespace DataflowPipeline
             public ISourceBlock<Odd> OddSource { get; private set; }
             public ISourceBlock<Even> EvenSource { get; private set; }
 
-            public SeparateByLength(Func <Input, Action<Even>, Odd> transform)
+            public SeparateByLength(Func <Input, Even, Action<Even>, Odd, Action<Odd>> assign)
             {
                 var evenBlock = new BufferBlock<Even>();
-                var transformBlock =
-                    new TransformBlock<Input, Odd>(input => transform(input, even => evenBlock.Post(even)));
+                var oddBlock = new BufferBlock<Odd>();
+                var actionBlock =
+                    new ActionBlock<Input>(input => assign(input, even => evenBlock.Post(even), odd => oddBlock.Post(odd)));
 
-                transformBlock.Completion.ContinueWith(_ => evenBlock.Complete());
+                actionBlock.Completion.ContinueWith(_ => evenBlock.Complete());
 
-                m_target = transformBlock;
-                OddSource = transformBlock;
+                m_target = actionBlock;
+                OddSource = oddBlock;
                 EvenSource = evenBlock;
             }
 

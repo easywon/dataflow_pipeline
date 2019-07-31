@@ -14,3 +14,24 @@ Needs better understanding of how the process operates.
 
 Look into replicating the output with a different class constructor.
 Or look into creating separate pipelines for each of the "outputs".
+
+7/31/19 -
+Look into building separate pipelines for each output.
+- Relatively easy to build.
+- Need to pass the original pipe completion to the next pipe. Example: ContinueWith(_ => newPipeline.Complete());
+
+Attempted to recreate / restructure the custom dataflow block class.
+Results seem to point toward either developing a stronger understanding of C# or making better use of the predefined blocks.
+
+Benefits of creating a custom dataflow block -
+- Allows for a clean implementation (Strong abstraction)
+- potentially more powerful input-output relationships.
+- Better readability as the dataflow network grows in size.
+
+Benefits of utilizing separate pipes -
+- Stronger distinction between the two dataflow. 
+- Easier to implement.
+- The interaction between the pipelines are flexible.
+- Utilizes the pre-defined blocks. 
+
+Focusing on separate dataflow pipes. Try to create issues/errors with the process and see what happens to the dataflow.
