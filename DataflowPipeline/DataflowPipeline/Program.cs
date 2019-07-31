@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
+using System.Threading.Tasks;
 using System.Threading.Tasks.Dataflow;
 
 namespace DataflowPipeline
@@ -47,61 +48,36 @@ namespace DataflowPipeline
                    .ToArray();
             });
 
-            // Finds all words in the specified collection whose reverse also 
-            // exists in the collection.
-            var findReversedWords = new TransformManyBlock<string[], string>(words =>
+            var OddBuffer = new BufferBlock<string>();
+            var EvenBuffer = new BufferBlock<string>();
+
+            // Designate proper pipelines for Odd and Even lettered words
+            var filterOddEven = new ActionBlock<string[]>(wordArray =>
             {
-                Console.WriteLine("Finding reversed words...");
+                Console.WriteLine("Pushing messages to the right pipeline");
 
-                var wordsSet = new HashSet<string>(words);
-
-                return from word in words.AsParallel()
-                       let reverse = new string(word.Reverse().ToArray())
-                       where word != reverse && wordsSet.Contains(reverse)
-                       select word;
-            });
-
-            // New Custom Flow
-            var SplitOddEven = new CustomDataflow.SeparateByLength<string[], string[], string>(
-                (a, even) =>
+                foreach(string word in wordArray)
                 {
-                    string temp = "";
-
-                    foreach(string s in a)
+                    if(word.Length % 2 == 0)
                     {
-                        if(s.Length % 2 == 0)
-                        {
-                            even(s);
-                        }
-                        else
-                        {
-                            temp += s + " ";
-                        }
+                        EvenBuffer.Post(word);
                     }
-
-                    return temp.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                });
-
-            // Print Odd Words
-            var printOddWords = new ActionBlock<string[]>(oddWord =>
-            {
-                foreach(string s in oddWord)
-                {
-                    Console.WriteLine("Odd word - " + s);
+                    else
+                    {
+                        OddBuffer.Post(word);
+                    }
                 }
             });
 
-            var printEvenWords = new ActionBlock<string>(evenWord =>
+            // Creates actions for the appropriate buffers
+            var printOddWords = new ActionBlock<string>(word =>
             {
-                Console.WriteLine("Even word - " + evenWord);
+                Console.WriteLine("Odd word: {0} {1}", word, word.Length);
             });
 
-
-            // Prints the provided reversed words to the console.    
-            var printReversedWords = new ActionBlock<string>(reversedWord =>
+            var printEvenWords = new ActionBlock<string>(word =>
             {
-                Console.WriteLine("Found reversed words {0}/{1}",
-                   reversedWord, new string(reversedWord.Reverse().ToArray()));
+                Console.WriteLine("Even word: {0} {1}", word, word.Length);
             });
 
             //
@@ -112,12 +88,11 @@ namespace DataflowPipeline
 
             downloadString.LinkTo(createWordList, linkOptions);
             createWordList.LinkTo(filterWordList, linkOptions);
-            //filterWordList.LinkTo(findReversedWords, linkOptions);
-            //findReversedWords.LinkTo(printReversedWords, linkOptions);
+            filterWordList.LinkTo(filterOddEven, linkOptions);
 
-            filterWordList.LinkTo(SplitOddEven, linkOptions);
-            SplitOddEven.EvenSource.LinkTo(printEvenWords, linkOptions);
-            SplitOddEven.OddSource.LinkTo(printOddWords, linkOptions);
+            OddBuffer.LinkTo(printOddWords, linkOptions);
+            EvenBuffer.LinkTo(printEvenWords, linkOptions);
+
 
             // Process "The Iliad of Homer" by Homer.
             downloadString.Post("http://www.gutenberg.org/files/6130/6130-0.txt");
@@ -125,10 +100,10 @@ namespace DataflowPipeline
             // Mark the head of the pipeline as complete.
             downloadString.Complete();
 
-            printOddWords.Completion.Wait();
+            // Create a task array to wait for all tasks to finish.
+            Task[] pipelineTask = {printOddWords.Completion, printEvenWords.Completion};
 
-            // Wait for the last block in the pipeline to process all messages.
-            //printReversedWords.Completion.Wait();
+            Task.WaitAll(pipelineTask);
         }
     }
 }
