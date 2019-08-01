@@ -16,10 +16,20 @@ namespace DataflowPipeline
             // Create members of the pipeline.
             //
 
+            var logBuffer = new BufferBlock<string>();
+            var writeLog = new ActionBlock<string>(log =>
+            {
+                using (StreamWriter file =
+                    new StreamWriter(@"C:\Users\Peter.Lee\Desktop\temp\iliadlog.txt", true))
+                {
+                    file.WriteLine("{0} - {1}", DateTime.Now, log);
+                }
+            });
+
             // Download the requested resource as a string
             var downloadString = new TransformBlock<string, string>(async uri =>
             {
-                Console.WriteLine("Downloading '{0}'...", uri);
+                await logBuffer.SendAsync("Downloading '" + uri + "'...");
 
                 return await new HttpClient().GetStringAsync(uri);
             });
@@ -27,7 +37,7 @@ namespace DataflowPipeline
             // Separates the specified text into an array of words.
             var createWordList = new TransformBlock<string, string[]>(text =>
             {
-                Console.WriteLine("Creating word list... " + text.Length);
+                logBuffer.SendAsync("Creating word list... " + text.Length);
 
                 // Remove common punctuation by replacing all non-letter characters 
                 // with a space character.
@@ -43,7 +53,7 @@ namespace DataflowPipeline
             // Removes duplicates.
             var filterWordList = new ActionBlock<string[]>(words =>
             {
-                Console.WriteLine("Filtering word list...");
+                logBuffer.SendAsync("Filtering word list...");
 
                 var wordArray = words
                    .Where(word => word.Length > 8)
@@ -66,7 +76,7 @@ namespace DataflowPipeline
                 }
             });
 
-            var printEvenWords = new ActionBlock<string>(async word =>
+            var printEvenWords = new ActionBlock<string>(word =>
             {
                 using (StreamWriter file =
                     new StreamWriter(@"C:\Users\Peter.Lee\Desktop\temp\evenwords.txt", true))
@@ -92,8 +102,13 @@ namespace DataflowPipeline
             WordBuffer.LinkTo(printOddWords, linkOptions, word => word.Length % 2 == 1);
             WordBuffer.LinkTo(printEvenWords, linkOptions, word => word.Length % 2 == 0);
 
+            logBuffer.LinkTo(writeLog, linkOptions);
+
             // Creating a completion link between original pipeline and two output pipelines
             filterWordList.Completion.ContinueWith(_ => WordBuffer.Complete());
+
+            printOddWords.Completion.ContinueWith(_ => logBuffer.Complete());
+            printEvenWords.Completion.ContinueWith(_ => logBuffer.Complete());
 
 
             // Process "The Iliad of Homer" by Homer.
@@ -102,7 +117,10 @@ namespace DataflowPipeline
             File.WriteAllText(@"C:\Users\Peter.Lee\Desktop\temp\evenwords.txt", string.Empty);
 
             // Mark the head of the pipeline as complete.
-            downloadString.Complete();          
+            downloadString.Complete();
+
+            // Wait for logging to finish. Basically wait for ALL processes to finish as logging should only complete after everything else has.
+            writeLog.Completion.Wait();
 
             // Create a task array to wait for all tasks to finish.
             // Simply writing down Completion.Wait() for all output pipes should suffice?
