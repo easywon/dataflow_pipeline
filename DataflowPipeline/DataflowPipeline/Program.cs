@@ -50,7 +50,7 @@ namespace DataflowPipeline
             });
 
             var OddBuffer = new BufferBlock<string>();
-            var EvenBuffer = new BufferBlock<string>();
+            var EvenBuffer = new BufferBlock<string>(/*new ExecutionDataflowBlockOptions { BoundedCapacity = 10 }*/);
 
             // Designate proper pipelines for Odd and Even lettered words
             var filterOddEven = new ActionBlock<string[]>(wordArray =>
@@ -61,13 +61,20 @@ namespace DataflowPipeline
                 {
                     if(word.Length % 2 == 0)
                     {
-                        EvenBuffer.Post(word);
+                        EvenBuffer.SendAsync(word);
                     }
                     else
                     {
-                        OddBuffer.Post(word);
+                        OddBuffer.SendAsync(word);
                     }
                 }
+            });
+
+            // Potential pause/delay block.
+            var delayEvenWords = new TransformBlock<string, string>(async word =>
+            {
+                await Task.Delay(1000);
+                return word;
             });
 
             // Creates actions for the appropriate buffers
@@ -80,13 +87,20 @@ namespace DataflowPipeline
                 }
             });
 
-            var printEvenWords = new ActionBlock<string>(word =>
+            var printEvenWords = new ActionBlock<string>(async word =>
             {
+                await Task.Delay(25);
+                Console.WriteLine(word);
+
                 using (StreamWriter file =
                     new StreamWriter(@"C:\Users\Peter.Lee\Desktop\temp\evenwords.txt", true))
                 {
                     file.WriteLine(word);
                 }
+            },
+            new ExecutionDataflowBlockOptions
+            {
+                MaxMessagesPerTask = 5
             });
 
             //
@@ -115,13 +129,15 @@ namespace DataflowPipeline
             File.WriteAllText(@"C:\Users\Peter.Lee\Desktop\temp\evenwords.txt", string.Empty);
 
             // Mark the head of the pipeline as complete.
-            downloadString.Complete();
+            downloadString.Complete();          
 
             // Create a task array to wait for all tasks to finish.
             // Simply writing down Completion.Wait() for all output pipes should suffice?
             Task[] pipelineTask = { printOddWords.Completion, printEvenWords.Completion };
-
             Task.WaitAll(pipelineTask);
+
+            // Alternate waitall
+            Task.WaitAll(printOddWords.Completion, printEvenWords.Completion);
 
             Console.WriteLine("Done");
         }
