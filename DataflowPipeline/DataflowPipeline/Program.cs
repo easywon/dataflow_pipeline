@@ -38,48 +38,27 @@ namespace DataflowPipeline
                 return text.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
             });
 
+            var WordBuffer = new BufferBlock<string>();
+
             // Removes duplicates.
-            var filterWordList = new TransformBlock<string[], string[]>(words =>
+            var filterWordList = new ActionBlock<string[]>(words =>
             {
                 Console.WriteLine("Filtering word list...");
 
-                return words
+                var wordArray = words
                    .Where(word => word.Length > 8)
                    .Distinct()
                    .ToArray();
-            });
 
-            var OddBuffer = new BufferBlock<string>();
-            var EvenBuffer = new BufferBlock<string>(/*new ExecutionDataflowBlockOptions { BoundedCapacity = 10 }*/);
-
-            // Designate proper pipelines for Odd and Even lettered words
-            var filterOddEven = new ActionBlock<string[]>(wordArray =>
-            {
-                Console.WriteLine("Pushing messages to the right pipeline");
-
-                foreach(string word in wordArray)
+                foreach(string w in wordArray)
                 {
-                    if(word.Length % 2 == 0)
-                    {
-                        EvenBuffer.SendAsync(word);
-                    }
-                    else
-                    {
-                        OddBuffer.SendAsync(word);
-                    }
+                    WordBuffer.SendAsync(w);
                 }
-            });
-
-            // Potential pause/delay block.
-            var delayEvenWords = new TransformBlock<string, string>(async word =>
-            {
-                await Task.Delay(1000);
-                return word;
             });
 
             // Creates actions for the appropriate buffers
             var printOddWords = new ActionBlock<string>(word =>
-            {
+            { 
                 using (StreamWriter file =
                     new StreamWriter(@"C:\Users\Peter.Lee\Desktop\temp\oddwords.txt", true))
                 {
@@ -89,9 +68,6 @@ namespace DataflowPipeline
 
             var printEvenWords = new ActionBlock<string>(async word =>
             {
-                await Task.Delay(25);
-                Console.WriteLine(word);
-
                 using (StreamWriter file =
                     new StreamWriter(@"C:\Users\Peter.Lee\Desktop\temp\evenwords.txt", true))
                 {
@@ -112,15 +88,12 @@ namespace DataflowPipeline
             // Linking the first pipe line.
             downloadString.LinkTo(createWordList, linkOptions);
             createWordList.LinkTo(filterWordList, linkOptions);
-            filterWordList.LinkTo(filterOddEven, linkOptions);
+
+            WordBuffer.LinkTo(printOddWords, linkOptions, word => word.Length % 2 == 1);
+            WordBuffer.LinkTo(printEvenWords, linkOptions, word => word.Length % 2 == 0);
 
             // Creating a completion link between original pipeline and two output pipelines
-            filterOddEven.Completion.ContinueWith(_ => OddBuffer.Complete());
-            filterOddEven.Completion.ContinueWith(_ => EvenBuffer.Complete());
-
-            // Linking buffer blocks to action blocks.
-            OddBuffer.LinkTo(printOddWords, linkOptions);
-            EvenBuffer.LinkTo(printEvenWords, linkOptions);
+            filterWordList.Completion.ContinueWith(_ => WordBuffer.Complete());
 
 
             // Process "The Iliad of Homer" by Homer.
