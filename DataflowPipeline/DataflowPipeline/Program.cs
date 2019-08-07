@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Threading.Tasks;
 using System.Threading.Tasks.Dataflow;
 
 namespace DataflowPipeline
@@ -14,10 +16,20 @@ namespace DataflowPipeline
             // Create members of the pipeline.
             //
 
+            var logBuffer = new BufferBlock<string>();
+            var writeLog = new ActionBlock<string>(log =>
+            {
+                using (StreamWriter file =
+                    new StreamWriter(@"C:\Users\Peter.Lee\Desktop\temp\iliadlog.txt", true))
+                {
+                    file.WriteLine("{0} - {1}", DateTime.Now, log);
+                }
+            });
+
             // Download the requested resource as a string
             var downloadString = new TransformBlock<string, string>(async uri =>
             {
-                Console.WriteLine("Downloading '{0}'...", uri);
+                await logBuffer.SendAsync("Downloading '" + uri + "'...");
 
                 return await new HttpClient().GetStringAsync(uri);
             });
@@ -25,7 +37,7 @@ namespace DataflowPipeline
             // Separates the specified text into an array of words.
             var createWordList = new TransformBlock<string, string[]>(text =>
             {
-                Console.WriteLine("Creating word list... " + text.Length);
+                logBuffer.SendAsync("Creating word list... " + text.Length);
 
                 // Remove common punctuation by replacing all non-letter characters 
                 // with a space character.
@@ -36,72 +48,45 @@ namespace DataflowPipeline
                 return text.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
             });
 
-            // Removes duplicates.
-            var filterWordList = new TransformBlock<string[], string[]>(words =>
-            {
-                Console.WriteLine("Filtering word list...");
+            var WordBuffer = new BufferBlock<string>();
 
-                return words
+            // Removes duplicates.
+            var filterWordList = new ActionBlock<string[]>(words =>
+            {
+                logBuffer.SendAsync("Filtering word list...");
+
+                var wordArray = words
                    .Where(word => word.Length > 8)
                    .Distinct()
                    .ToArray();
-            });
 
-            // Finds all words in the specified collection whose reverse also 
-            // exists in the collection.
-            var findReversedWords = new TransformManyBlock<string[], string>(words =>
-            {
-                Console.WriteLine("Finding reversed words...");
-
-                var wordsSet = new HashSet<string>(words);
-
-                return from word in words.AsParallel()
-                       let reverse = new string(word.Reverse().ToArray())
-                       where word != reverse && wordsSet.Contains(reverse)
-                       select word;
-            });
-
-            // New Custom Flow
-            var SplitOddEven = new CustomDataflow.SeparateByLength<string[], string[], string>(
-                (a, even) =>
+                foreach(string w in wordArray)
                 {
-                    string temp = "";
-
-                    foreach(string s in a)
-                    {
-                        if(s.Length % 2 == 0)
-                        {
-                            even(s);
-                        }
-                        else
-                        {
-                            temp += s + " ";
-                        }
-                    }
-
-                    return temp.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                });
-
-            // Print Odd Words
-            var printOddWords = new ActionBlock<string[]>(oddWord =>
-            {
-                foreach(string s in oddWord)
-                {
-                    Console.WriteLine("Odd word - " + s);
+                    WordBuffer.SendAsync(w);
                 }
             });
 
-            var printEvenWords = new ActionBlock<string>(evenWord =>
-            {
-                Console.WriteLine("Even word - " + evenWord);
+            // Creates actions for the appropriate buffers
+            var printOddWords = new ActionBlock<string>(word =>
+            { 
+                using (StreamWriter file =
+                    new StreamWriter(@"C:\Users\Peter.Lee\Desktop\temp\oddwords.txt", true))
+                {
+                    file.WriteLine(word);
+                }
             });
 
-
-            // Prints the provided reversed words to the console.    
-            var printReversedWords = new ActionBlock<string>(reversedWord =>
+            var printEvenWords = new ActionBlock<string>(word =>
             {
-                Console.WriteLine("Found reversed words {0}/{1}",
-                   reversedWord, new string(reversedWord.Reverse().ToArray()));
+                using (StreamWriter file =
+                    new StreamWriter(@"C:\Users\Peter.Lee\Desktop\temp\evenwords.txt", true))
+                {
+                    file.WriteLine(word);
+                }
+            },
+            new ExecutionDataflowBlockOptions
+            {
+                MaxMessagesPerTask = 5
             });
 
             //
@@ -110,25 +95,41 @@ namespace DataflowPipeline
 
             var linkOptions = new DataflowLinkOptions { PropagateCompletion = true };
 
+            // Linking the first pipe line.
             downloadString.LinkTo(createWordList, linkOptions);
             createWordList.LinkTo(filterWordList, linkOptions);
-            //filterWordList.LinkTo(findReversedWords, linkOptions);
-            //findReversedWords.LinkTo(printReversedWords, linkOptions);
 
-            filterWordList.LinkTo(SplitOddEven, linkOptions);
-            SplitOddEven.EvenSource.LinkTo(printEvenWords, linkOptions);
-            SplitOddEven.OddSource.LinkTo(printOddWords, linkOptions);
+            WordBuffer.LinkTo(printOddWords, linkOptions, word => word.Length % 2 == 1);
+            WordBuffer.LinkTo(printEvenWords, linkOptions, word => word.Length % 2 == 0);
+
+            logBuffer.LinkTo(writeLog, linkOptions);
+
+            // Creating a completion link between original pipeline and two output pipelines
+            filterWordList.Completion.ContinueWith(_ => WordBuffer.Complete());
+
+            Task.WhenAll(printOddWords.Completion, printEvenWords.Completion)
+                .ContinueWith(_ => logBuffer.Complete());
 
             // Process "The Iliad of Homer" by Homer.
             downloadString.Post("http://www.gutenberg.org/files/6130/6130-0.txt");
+            File.WriteAllText(@"C:\Users\Peter.Lee\Desktop\temp\oddwords.txt", string.Empty);
+            File.WriteAllText(@"C:\Users\Peter.Lee\Desktop\temp\evenwords.txt", string.Empty);
 
             // Mark the head of the pipeline as complete.
             downloadString.Complete();
 
-            printOddWords.Completion.Wait();
+            // Wait for logging to finish. Basically wait for ALL processes to finish as logging should only complete after everything else has.
+            writeLog.Completion.Wait();
 
-            // Wait for the last block in the pipeline to process all messages.
-            //printReversedWords.Completion.Wait();
+            // Create a task array to wait for all tasks to finish.
+            // Simply writing down Completion.Wait() for all output pipes should suffice?
+            Task[] pipelineTask = { printOddWords.Completion, printEvenWords.Completion };
+            Task.WaitAll(pipelineTask);
+
+            // Alternate waitall
+            Task.WaitAll(printOddWords.Completion, printEvenWords.Completion);
+
+            Console.WriteLine("Done");
         }
     }
 }

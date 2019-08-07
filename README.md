@@ -34,6 +34,7 @@ Benefits of utilizing separate pipes -
 - The interaction between the pipelines are flexible.
 - Utilizes the pre-defined blocks. 
 
+<<<<<<< HEAD
 Focusing on separate dataflow pipes. Try to create issues/errors with the process and see what happens to the dataflow.
 
 8/1/19 -
@@ -51,3 +52,6 @@ Another way to create multiple pipelines.
 Filtering ON buffer load instead of sending TO buffer.
 
 Implement a logging pipeline that exists across the entire process.
+=======
+Focusing on separate dataflow pipes. Try to create issues/errors with the process and see what happens to the dataflow.
+>>>>>>> single-buffer
