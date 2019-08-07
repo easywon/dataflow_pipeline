@@ -107,9 +107,8 @@ namespace DataflowPipeline
             // Creating a completion link between original pipeline and two output pipelines
             filterWordList.Completion.ContinueWith(_ => WordBuffer.Complete());
 
-            printOddWords.Completion.ContinueWith(_ => logBuffer.Complete());
-            printEvenWords.Completion.ContinueWith(_ => logBuffer.Complete());
-
+            Task.WhenAll(printOddWords.Completion, printEvenWords.Completion)
+                .ContinueWith(_ => logBuffer.Complete());
 
             // Process "The Iliad of Homer" by Homer.
             downloadString.Post("http://www.gutenberg.org/files/6130/6130-0.txt");
