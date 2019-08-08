@@ -1,0 +1,129 @@
+Dataflow Pipelines in C# and Debugging Barry's DataPrep tool
+
+Problem - Barry's DataPrep tool has inconsistent results with output and error files.
+For example, 100 input file that should result in 90 output and 10 errors only returns 83 outputs and 4 errors.
+DataPrep tool makes heavy usage of the Task Parallel Library (TPL) in C#.
+
+Solution - 
+1. Learn how the Dataflow (Task Parallel Library) works
+
+TPL consists of predefined blocks that provide an easy to build structure for dataflow networks.
+Three broad types of blocks exist within the libaray: buffering, execution, and grouping.
+Buffering and grouping blocks organize and faciliate the flow of data while execution blocks
+perform some "action" on the data itself.
+
+Each of the blocks can have conditions and properties that restrict or broaden its use condition.
+Additionally, execution blocks utilize lambda functions to define its functionality.
+These blocks are used to describe each of the steps within the dataflow design.
+The steps are then connected using links to establish a logical flow of information from the start to finish.
+Messages containing information are posted to the beginning of the data network and flows through each
+step according to the design.
+
+Each block tracks its own task status through a property called Completion. 
+Completion from one task must be propogated through the next logical step either manually or automatically.
+This allows each step to close down after it completes its task to prevent undesired messages and immature
+closures. 
+
+
+2. Creating a adhoc data parser
+
+In order to put the knowledge to practice, I spent 3 days implementing 2 different solutions that take a text file 
+and separates the words into two files: one with words that are longer than 8 letters and has even number of letters 
+and another with words that are longer than 8 letters and has odd number of letters.
+
+First approach consisted of implementing a custom class that inherits the TransformBlock object from TPL. Instead of 
+having one input and one output, the new custom class would have one input and two outputs. One of the outputs would 
+follow the link to the next block as per usual and the other output would post the message to a new error pipe that 
+runs separately from the inital pipeline. This approach has the benefits of being able to pass parameters through the 
+block instantiation that is normally not avaiable from the predefined blocks from TPL as well as giving greater flexibility
+to what kind of functionalities we can implement within the TransformBlock. The draw back is that the limited scope of 
+a custom class restricts the usage.
+
+Second approach was to load the messages into a single buffer block that links conditionally to the two possible outputs.
+The constrained links would function as the filter that sorts the words into odd and even lettered words. Since we are 
+using only the predefined blocks as they are, it is significantly easier to set up a simple test case scenario such as 
+this adhoc data parser. We can also expand the functionality to create a logging pipeline where each step in the original
+parsing pipeline posts new log messages to the log pipe. The base library is incredibly easy to set up and utilize.
+The main drawback is that as size of the dataflow network grows, it can be difficult to maintain the integrity of the 
+network.
+
+Benefits of creating a custom dataflow block -
+- Allows for a clean implementation (Strong abstraction)
+- potentially more powerful input-output relationships.
+- Better readability as the dataflow network grows in size.
+
+Benefits of utilizing separate pipes -
+- Stronger distinction between the two dataflow. 
+- Easier to implement.
+- The interaction between the pipelines are flexible.
+- Utilizes the pre-defined blocks. 
+
+The choice between two options comes down to the size and scope of the problem that needs to be addressed.
+For Barry's intended purpose, creating a custom class for each of the blocks is the better choice in terms of design.
+
+
+3. Understanding Barry's design
+
+The DataPrep tool consists of components within a library that can be assembled by the program according to a blueprint
+given by an XML file. This allows the program to be flexible for different types of data prep uses. In order to 
+implement the design, each of the blocks are built upon an interface that effectively constructs the pipeline itself. 
+By adding targets, much like links, you can create the flow of information from one interface element to another.
+The blocks then define their specific uses on the interface. This allows for strongly defined functions that can also
+utilize parameters that are otherwise difficult to implement on lambda functions. After each of the blocks are 
+instantiated, the program constructs the relationships according to the user definition and runs messages through the pipeline.
+
+
+4. Finding the source of the problem
+
+After taking the time to understand how Barry implemented his design, I needed to find a starting point to debug his program.
+Barry had initially described the issue as inconsistent program termination, where the number of input lines did not match
+the number of total output lines. I took some time to track the completion status and I noticed that only the output writer's 
+completion was being waited for in his program instead of both output and error file writers. When I started to wait for 
+error writer as well, the program would never terminate, indicating that the error writer was not completing. 
+
+With the information that error writer was not terminating, I looked into the implementation of the file writer as well as 
+the previous string formatter blocks that link directly to the writers. The implementations were coded correctly, which
+led me to look into the link between the blocks. Perhaps the wrong blocks were being linked? That turned out to not be the case
+as each block had the proper Source and Target assignment. However, the effort was not without fruit as I determined that the 
+reason why the error writer was not completing was due to outputs in error formatter not being piped to the error writer.
+At this point I started to look into rewriting parts of the pipeline.
+
+I started from the easiest solution to implement - creating fake buffer blocks to simulate a longer pipe. By slotting empty
+transformation blocks between the error formatter and error writer blocks, I can determine where the information is getting stuck.
+The messages are either not leaving error formatter, or error writer is not receiving them. The buffer blocks showed that
+the messages were indeed not leaving the error formatter as they remained in error formatter rather than traveling through the
+two buffer blocks.
+
+Thus the logical step is to investigate why the messages were not leaving the error formatter. Since the output pipe and error pipes
+should functionally work the same way, we should be able to swap the components of the output pipe (delimited formatter and output 
+writer) with the components of the error pipe (error formatter and error writer). By swapping the components of the pipe line, we can 
+see if the issue comes from the component itself or from how the error pipe and output pipes are implemented. The results from the test 
+showed that now, all errors were being written correctly, but not the outputs. The bug was not in the error formatter component, but instead 
+in how the components were being linked in the error pipe.
+
+I reinvestigated the linking logic and noticed one small detail. The links were being established on a null condition on the Record 
+object's Exception. Thus, if the record did not have an exception, it would remain in the main output pipe. If the record did have
+an exception, it would sit in that component until the error target component received that message. This makes sense logically. If
+a record has an exception, send it thorugh the error pipe. The issue came in how Barry had designed the pipeline within the program. 
+He set the target and error targets on the main branching block as he should. The problem was in how he linked subsequent components. 
+He had set subsequent blocks of the error pipeline as regular targets instead of error targets. On initial glance, it makes sense to set the 
+components of the error pipe as targets to each other as each of the blocks in the error pipe aren't necessarily throwing errors within
+the block logic itself. The records SHOULD flow to the output of the error pipe instead of the error since the message did not fault in
+the block. However, Barry's design meant that once the records were faulted, they remained faulted until the end, meaning no matter what
+block that record flowed into after the initial fault, it would continue filtering to the error pipe. The solution was a simple change 
+from AddTarget to AddErrorTarget.
+
+
+5. Discussion following the debug
+
+The bug itself was a relatively easy fix. The process of finding the bug itself, on the other hand, was a fairly difficult process as 
+I had to develop a strong understanding of Barry's design as well as double checking each of the block implementations and connection 
+logic to ensure the problem didn't lie in the design itself. The main reason why the bug existed in the first place seemed to be a 
+disconnect between what Barry had intended and what Barry had created. He had intended to create an output pipe and an error pipe,
+but he had created an output pipe and an error pipe for every single block.
+
+With the bug out of the way, the next logical step is to finish designing the data prep tool so it conforms to the current implementation
+or make modifications so that link conditions between the output and error pipes aren't binary. Regardless of which decision we make,
+the basic principle of being able to create custom blocks that construct the pipeline itself with a given layout remains fundamental.
+Ideas for blocks that reset the exception so that the message can return to the output pipe or an additional attribute within a record
+that flags the message as an error are all valid solutions to adding flexibility to error handling for DataPrep.
